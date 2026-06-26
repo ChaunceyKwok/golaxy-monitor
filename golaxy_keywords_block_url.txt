@@ -1,0 +1,83 @@
+# URL 黑名单：按文章原文 url 字符串包含匹配
+# 每行一条规则（不含 #），命中即整条拦截
+# 适用场景: sourceWebsite 字段为空或不准时，url 是更稳定的拦截维度
+# 注: 域名匹配用 ".domain.com" 形式（含点），避免误伤类似 12366law.cn / mylawtime.com 等无关域名
+# 但程序按子串包含匹配，所以裸写 "lawtime.cn" 也可——本文统一写根域名(不含 www./m. 前缀)，程序会命中子串
+
+# ==================== 法律咨询类 ====================
+lawtime.cn
+66law.cn
+66law.com
+findlaw.cn
+64365.com
+fashixiong.com
+fashi.cn
+lvshihome.com
+365law.cn
+64365.com.cn
+
+# ==================== 法律SEO内容农场类（专门生产「怎么追回/如何解决」法律问答SEO文章）====================
+luyouqiwang.cn
+news.luyouqiwang.cn
+
+# ==================== 投诉平台类（整站都是 UGC 投诉）====================
+# 注: 黑猫投诉(tousu.sina.com.cn) 不在此拦截, 由代码层特殊处理
+#   仅当命中「腾讯理财通」或「腾安基金」时推送, 否则按 UGC 个人投诉过滤
+xfb315.com
+12365auto.com
+315che.com
+3158.cn
+ts.21our.com
+diyibaobei.com
+tousubao.com
+zgpjhy.com
+wzwsrc.com
+zxwdsy.com
+wogoo.com
+cqn.com.cn
+ccn.com.cn
+
+# ==================== 地方问政 / 投诉直通车类（整站个人诉求）====================
+voc.com.cn
+ts.voc.com.cn
+rednet.cn
+msx.rednet.cn
+hn.rednet.cn
+sohu-rednet
+law.rednet.cn
+
+# ==================== UGC / 自媒体类 ====================
+jianshu.com
+douban.com
+douban.com.cn
+i-ciyuan.com
+
+# ==================== 汽车垂类（仅当 sourceWebsite 空时启用）====================
+autohome.com.cn
+bitauto.com
+dongchedi.com
+pcauto.com.cn
+cheshi.com
+
+# ==================== 房产中介类（仅当 sourceWebsite 空时启用）====================
+soufun.com
+fang.com
+fangjia.com
+leju.com
+anjuke.com
+
+# ==================== 保险中介类 ====================
+huize.com
+vobao.cn
+xiangrikui.com
+datebao.com
+
+# ==================== 招标信息类 ====================
+yfbzb.com
+zhaobiao.cn
+zhaobiaoziyuan.com
+
+# ==================== 腾讯自选股 App 行情类（机器生成的 ETF/股票/卖空播报）====================
+gu.qq.com
+stockhtm.finance.qq.com
+guqq.com

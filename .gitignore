@@ -1,1 +1,6 @@
 .golaxy_seen.json
+.golaxy_yuqing_seen.json
+.golaxy_yuqing_stop
+__pycache__/
+*.pyc
+push_logs/
