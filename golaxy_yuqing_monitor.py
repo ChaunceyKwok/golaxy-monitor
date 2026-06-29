@@ -77,6 +77,8 @@ MAX_PUSH = 20             # 单次推送最多条数
 NEGATIVE_ALERT = True     # 负面舆情 @ 提醒
 ALERT_AT_ALL = False      # True=@所有人; False=@手机号列表
 ALERT_MOBILES = ["13140197825"]  # ulrichguo
+# 移动话费充值事件相关舆情 → 额外 @ 群里的 anderschen(陈恩达), 用企业微信 userid
+MOBILE_EVENT_AT_USERIDS = ["anderschen"]  # 陈恩达
 
 # 推送记录
 PUSH_LOG_ENABLE = True
@@ -934,20 +936,36 @@ def push_one(it):
     ok = res.get("errcode") == 0
     if ok:
         log_push_to_csv(it)
+    is_mobile_event = bool(it.get("_mobile_event"))
     # 负面 @ 提醒
     if ok and NEGATIVE_ALERT and it.get("_senti") == -1:
+        _at_tail = "@ulrichguo @anderschen 请及时关注处理。" if is_mobile_event else "@ulrichguo 请及时关注处理。"
         at_text = (f"⚠️ 负面舆情预警｜{it.get('matched_kw','-')}\n"
-                   f"{it.get('title','')[:40]}\n@ulrichguo 请及时关注处理。")
+                   f"{it.get('title','')[:40]}\n{_at_tail}")
         payload = {"msgtype": "text", "text": {"content": at_text}}
         if ALERT_AT_ALL:
             payload["text"]["mentioned_list"] = ["@all"]
-        elif ALERT_MOBILES:
-            payload["text"]["mentioned_mobile_list"] = ALERT_MOBILES
+        else:
+            payload["text"]["mentioned_mobile_list"] = list(ALERT_MOBILES)
+            # 移动话费充值事件: 额外 @ anderschen(陈恩达)
+            if is_mobile_event and MOBILE_EVENT_AT_USERIDS:
+                payload["text"]["mentioned_list"] = list(MOBILE_EVENT_AT_USERIDS)
         try:
             time.sleep(0.5)
             http_post(WEBHOOK_URL, payload)
         except Exception as e:
             log(f"   负面@提醒失败: {e}")
+    # 移动话费充值事件(非负面: 中性/我方口径) → 单独 @ anderschen(陈恩达)
+    elif ok and is_mobile_event and MOBILE_EVENT_AT_USERIDS:
+        at_text = (f"📵 移动话费充值事件相关舆情｜{it.get('matched_kw','-')}\n"
+                   f"{it.get('title','')[:40]}\n@anderschen 请关注。")
+        payload = {"msgtype": "text", "text": {"content": at_text,
+                                               "mentioned_list": list(MOBILE_EVENT_AT_USERIDS)}}
+        try:
+            time.sleep(0.5)
+            http_post(WEBHOOK_URL, payload)
+        except Exception as e:
+            log(f"   移动事件@提醒失败: {e}")
     return ok, res
 
 
@@ -1081,6 +1099,7 @@ def run_once(asts, excludes, block_media, block_url):
             cat_label = {"official": "我方口径/公告", "blame": "甩锅腾讯微信", "neutral": "事件相关"}.get(ev_cat, "事件相关")
             item["tag"] = f"📵移动话费充值事件·{cat_label}｜" + item["tag"].split("｜")[-1]
             item["matched_kw"] = f"移动话费充值事件/{cat_label}"
+            item["_mobile_event"] = True  # 标记移动事件 → 推送时 @anderschen(陈恩达)
             if ev_blame:
                 item["_senti"] = -1  # 甩锅腾讯/微信的失实负面 → 强制负面, 触发@提醒
             matched.append(item)
