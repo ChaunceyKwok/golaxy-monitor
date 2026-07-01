@@ -1052,32 +1052,34 @@ def push_one(it):
     if ok:
         log_push_to_csv(it)
     is_mobile_event = bool(it.get("_mobile_event"))
-    # 理财通/零钱通 负面 → 额外 @ yalinlei/minazeng (按业务标签判定)
+    # 业务归属判定: 理财通/零钱通 → yalinlei/minazeng; 移动事件 → anderschen; 其余 → ulrichguo
     _biz = it.get("matched_kw", "") or ""
     is_licai_biz = any(b in _biz for b in LICAI_ALERT_BIZ)
-    # 负面 @ 提醒
+    # 负面 @ 提醒 (按业务归属, 只@对应负责人, 不再统一兜底@ulrichguo)
     if ok and NEGATIVE_ALERT and it.get("_senti") == -1:
-        extra_at = []
-        if is_mobile_event:
-            extra_at.append("@anderschen")
+        at_userids = []
+        at_mobiles = []
+        at_names = []
         if is_licai_biz:
-            extra_at.append("@yalinlei")
-            extra_at.append("@minazeng")
-        _at_tail = ("@ulrichguo " + " ".join(extra_at) + " 请及时关注处理。").replace("  ", " ") if extra_at else "@ulrichguo 请及时关注处理。"
+            at_userids += list(LICAI_ALERT_USERIDS)
+            at_names += ["@yalinlei", "@minazeng"]
+        elif is_mobile_event:
+            at_userids += list(MOBILE_EVENT_AT_USERIDS)
+            at_names += ["@anderschen"]
+        else:
+            at_mobiles += list(ALERT_MOBILES)
+            at_names += ["@ulrichguo"]
+        _at_tail = " ".join(at_names) + " 请及时关注处理。"
         at_text = (f"⚠️ 负面舆情预警｜{it.get('matched_kw','-')}\n"
                    f"{it.get('title','')[:40]}\n{_at_tail}")
         payload = {"msgtype": "text", "text": {"content": at_text}}
         if ALERT_AT_ALL:
             payload["text"]["mentioned_list"] = ["@all"]
         else:
-            payload["text"]["mentioned_mobile_list"] = list(ALERT_MOBILES)
-            mention_ids = []
-            if is_mobile_event and MOBILE_EVENT_AT_USERIDS:
-                mention_ids += list(MOBILE_EVENT_AT_USERIDS)
-            if is_licai_biz and LICAI_ALERT_USERIDS:
-                mention_ids += list(LICAI_ALERT_USERIDS)
-            if mention_ids:
-                payload["text"]["mentioned_list"] = mention_ids
+            if at_mobiles:
+                payload["text"]["mentioned_mobile_list"] = at_mobiles
+            if at_userids:
+                payload["text"]["mentioned_list"] = at_userids
         try:
             time.sleep(0.5)
             http_post(WEBHOOK_URL, payload)
