@@ -602,7 +602,13 @@ AUTO_LOW_VALUE = ["懂车帝", "有驾", "汽车之家", "易车"]
 LEGAL_LOW_VALUE = ["法律快车", "法律问答", "华律网", "找法网", "律师", "法帮"]
 
 # 完全屏蔽平台: 消费者投诉/维权平台, 个体纠纷无舆情价值, 全部pass
-BLOCKED_PLATFORMS = ["消费保"]
+# 注: 消费保改为白名单放行(见下 XFB_WHITELIST_KW), 不再一刀切屏蔽; 此处保留其他需全屏的平台
+BLOCKED_PLATFORMS = []
+# 消费保(xfb315)白名单: 命中核心腾讯系支付/理财业务才放行(财付通/微信支付等真实负面投诉),
+# 其余个体消费纠纷仍屏蔽。比黑猫白名单宽(黑猫上微信支付投诉噪音过多故只留理财通类)。
+XFB_WHITELIST_KW = ["财付通", "微信支付", "微信零钱", "微信提现", "零钱通",
+                    "理财通", "腾讯理财通", "微信理财", "腾安基金",
+                    "微粒贷", "微众", "微保", "分付", "微企付", "tenpay"]
 # ===== 黑猫投诉规则（固定，禁止扩展）=====
 # 黑猫投诉是个人用户投诉平台，仅当以下词出现时才具备金融科技舆情价值
 # ⚠️ 严禁将"财付通"、"微信支付"等宽泛词加入此列表
@@ -1289,9 +1295,13 @@ def run_once(asts, excludes, block_media, block_url):
             if not is_negative:
                 excluded += 1; continue
 
-        # 完全屏蔽平台: 黑猫投诉/消费保 全部pass (黑猫投诉仅腾讯理财通/腾安基金放行)
-        if any(b in cap_web for b in BLOCKED_PLATFORMS):
+        # 完全屏蔽平台 (BLOCKED_PLATFORMS 现为空, 保留扩展位)
+        if BLOCKED_PLATFORMS and any(b in cap_web for b in BLOCKED_PLATFORMS):
             excluded += 1; continue
+        # 消费保(xfb315): 仅命中核心腾讯系业务的投诉才放行, 其余个体消费纠纷屏蔽
+        if "消费保" in cap_web or "xfb315" in url_domain:
+            if not any(kw in combined for kw in XFB_WHITELIST_KW):
+                excluded += 1; continue
         # 黑猫投诉平台: 仅腾讯理财通/腾安基金相关内容推送
         if "黑猫投诉" in cap_web or "tousu.sina.com.cn" in url_domain:
             has_heimaotou_kw = any(kw in combined for kw in HEIMAOTOU_WHITELIST_KW)
