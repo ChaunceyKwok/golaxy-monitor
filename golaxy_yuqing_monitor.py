@@ -808,51 +808,96 @@ _SUMMARY_CORE = (
     "腾讯", "腾安基金", "微信", "wepay", "tenpay",
 )
 
+# 行情播报体压缩: 自选股/ETF 播报正文冗长(换手率/成交额/溢折率/自选哥注...),
+# 用户只关心"标的 + 涨跌 + 幅度"。命中则直接产出精简摘要, 不进后续抽句。
+_MARKET_PAT = re.compile(
+    r"(.{2,30}?)\s*[（(]?\s*(\d{6}\.[A-Z]{2})?\s*[）)]?\s*"
+    r"(异动(?:走高|下跌|拉升|走低)?)[，,]\s*(现[涨跌]超?[\d.]+%|[涨跌][\d.]+%)"
+)
+# 排版噪音: 句首的"一、/1./①/✅/⚠️/【x】/（日期）"等结构标记, 抽句前剥离
+_LAYOUT_PAT = re.compile(
+    r"^\s*(?:[一二三四五六七八九十]{1,3}[、.．]|\d{1,2}[、.．)]|"
+    r"[①②③④⑤⑥⑦⑧⑨⑩]|[✅⚠️❗️🔴🟢▶️•·➤►]|【[^】]{1,12}】|"
+    r"（\s*\d{4}[.\-年].*?生效?\s*）|\(\s*\d{4}[.\-].*?\)|"
+    r"第[一二三四五六七八九十\d]+[章节部分条])+\s*"
+)
+
+
+def _compress_market(text):
+    """行情播报体 → '标的（代码）异动下跌，现跌超X%'。非播报体返回 None。"""
+    m = _MARKET_PAT.search(text)
+    if not m:
+        return None
+    name = re.sub(r"\s+", "", m.group(1)).strip("，,、。 ")
+    code = m.group(2) or ""
+    action = m.group(3) or "异动"
+    change = m.group(4) or ""
+    if len(name) < 3:
+        return None
+    head = f"{name}（{code}）" if code else name
+    return f"{head}{action}，{change}".strip("，,")
+
 
 def make_summary(title, text, hit_words, max_len=80):
-    """规则式摘要: 围绕腾讯系核心主体+舆情信号词抽取关键句, 丢弃无关开场白。
-    按原文顺序拼接得分>0的句子, 控制在 max_len 内。"""
+    """规则式摘要(零API): 先压缩行情播报体; 否则剥离排版噪音后按'信息密度+舆情信号+主体'
+    打分抽句, 丢弃寒暄/过渡句, 按原文顺序拼到 max_len。"""
     text = re.sub(r"\s+", " ", (text or "")).strip()
-    # 去掉结尾成串的话题标签 (#xxx #yyy, 视频号/抖音常见)
     cleaned = re.sub(r"(#[^#\s]+\s*)+$", "", text).strip() or text
     if not cleaned:
         return (title or "(无正文)")[:max_len]
+
+    mk = _compress_market(cleaned)
+    if mk:
+        return mk[:max_len]
+
     sentences = re.split(r"(?<=[。！？!?；;\n])", cleaned)
-    sentences = [s.strip(" ，,、；;") for s in sentences if len(s.strip()) >= 6]
-    if not sentences:
-        return cleaned[:max_len]
+    clean_sents = []
+    for s in sentences:
+        s = _LAYOUT_PAT.sub("", s).strip(" ，,、；;：:")
+        s = re.sub(r"\s+", " ", s)
+        if len(s) >= 6:
+            clean_sents.append(s)
+    if not clean_sents:
+        return _LAYOUT_PAT.sub("", cleaned).strip()[:max_len] or cleaned[:max_len]
 
     core = [w for w in dict.fromkeys(list(hit_words) + list(_SUMMARY_CORE)) if w]
     scored = []
-    for i, s in enumerate(sentences):
+    seen = set()
+    for i, s in enumerate(clean_sents):
+        if s in seen:
+            continue
+        seen.add(s)
         sl = s.lower()
         sc = 0
         if any(w.lower() in sl for w in core):
             sc += 3
-        if any(g in s for g in _SIGNAL_WORDS):
-            sc += 2
+        sig = sum(1 for g in _SIGNAL_WORDS if g in s)
+        sc += min(sig, 2) * 2
+        if re.search(r"\d", s):
+            sc += 1
+        if re.search(r"[%％元万亿倍]", s):
+            sc += 1
         if _FILLER_PAT.match(s):
-            sc -= 2           # 寒暄开场白降权
-        elif i == 0:
-            sc += 1           # 非寒暄的首句略加分
+            sc -= 3
         scored.append((sc, i, s))
 
     picked = [x for x in scored if x[0] > 0]
     if not picked:
-        # 全是低价值句: 退而取首句(避免空摘要)
-        picked = [scored[0]]
-    # 按原文顺序拼接, 保持可读性
-    picked.sort(key=lambda x: x[1])
+        picked = [min(scored, key=lambda x: x[1])]
+    picked.sort(key=lambda x: (-x[0], x[1]))
+    chosen = picked[:4]
+    chosen.sort(key=lambda x: x[1])
     summary = ""
-    for _, _, s in picked:
-        if len(summary) + len(s) > max_len:
+    for _, _, s in chosen:
+        sep = "" if not summary else " "
+        if len(summary) + len(sep) + len(s) > max_len:
             if not summary:
                 summary = s[:max_len] + "…"
             break
-        summary += s
-    # 保底: 提炼结果过短(如纯标题贴/单句视频号), 用清理后的全文截断补充
-    if len(summary) < 15 and len(cleaned) > len(summary):
-        summary = cleaned[:max_len] + ("…" if len(cleaned) > max_len else "")
+        summary += sep + s
+    if len(summary) < 12 and len(cleaned) > len(summary):
+        base = _LAYOUT_PAT.sub("", cleaned).strip()
+        summary = base[:max_len] + ("…" if len(base) > max_len else "")
     return summary or cleaned[:max_len]
 
 
