@@ -79,6 +79,10 @@ ALERT_AT_ALL = False      # True=@所有人; False=@手机号列表
 ALERT_MOBILES = ["13140197825"]  # ulrichguo
 # 移动话费充值事件相关舆情 → 额外 @ 群里的 anderschen(陈恩达), 用企业微信 userid
 MOBILE_EVENT_AT_USERIDS = ["anderschen"]  # 陈恩达
+# 理财通/零钱通 负面舆情 → 额外 @ 群里的 yalinlei / minazeng, 用企业微信 userid
+LICAI_ALERT_USERIDS = ["yalinlei", "minazeng"]
+# 命中这些业务标签的负面内容视为"理财业务负面", 触发 LICAI_ALERT_USERIDS @提醒
+LICAI_ALERT_BIZ = ["理财通", "零钱通", "腾讯理财通", "微信理财", "腾安基金"]
 
 # 推送记录
 PUSH_LOG_ENABLE = True
@@ -1048,9 +1052,18 @@ def push_one(it):
     if ok:
         log_push_to_csv(it)
     is_mobile_event = bool(it.get("_mobile_event"))
+    # 理财通/零钱通 负面 → 额外 @ yalinlei/minazeng (按业务标签判定)
+    _biz = it.get("matched_kw", "") or ""
+    is_licai_biz = any(b in _biz for b in LICAI_ALERT_BIZ)
     # 负面 @ 提醒
     if ok and NEGATIVE_ALERT and it.get("_senti") == -1:
-        _at_tail = "@ulrichguo @anderschen 请及时关注处理。" if is_mobile_event else "@ulrichguo 请及时关注处理。"
+        extra_at = []
+        if is_mobile_event:
+            extra_at.append("@anderschen")
+        if is_licai_biz:
+            extra_at.append("@yalinlei")
+            extra_at.append("@minazeng")
+        _at_tail = ("@ulrichguo " + " ".join(extra_at) + " 请及时关注处理。").replace("  ", " ") if extra_at else "@ulrichguo 请及时关注处理。"
         at_text = (f"⚠️ 负面舆情预警｜{it.get('matched_kw','-')}\n"
                    f"{it.get('title','')[:40]}\n{_at_tail}")
         payload = {"msgtype": "text", "text": {"content": at_text}}
@@ -1058,9 +1071,13 @@ def push_one(it):
             payload["text"]["mentioned_list"] = ["@all"]
         else:
             payload["text"]["mentioned_mobile_list"] = list(ALERT_MOBILES)
-            # 移动话费充值事件: 额外 @ anderschen(陈恩达)
+            mention_ids = []
             if is_mobile_event and MOBILE_EVENT_AT_USERIDS:
-                payload["text"]["mentioned_list"] = list(MOBILE_EVENT_AT_USERIDS)
+                mention_ids += list(MOBILE_EVENT_AT_USERIDS)
+            if is_licai_biz and LICAI_ALERT_USERIDS:
+                mention_ids += list(LICAI_ALERT_USERIDS)
+            if mention_ids:
+                payload["text"]["mentioned_list"] = mention_ids
         try:
             time.sleep(0.5)
             http_post(WEBHOOK_URL, payload)
