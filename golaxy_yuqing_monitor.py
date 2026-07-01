@@ -891,13 +891,19 @@ def build_item(src, tag_words, asts):
 def build_item_v2(src):
     """按 API 文档返回字段构建推送项 (使用 API 原生 tag/subtag/emotion)"""
     title = (src.get("title") or "").strip()
-    # 今日头条/西瓜视频等头条系平台: 标题很长, 摘取第一句 (按 。！？!?分隔) 即可
-    cap_web_raw = src.get("captureWebsite") or ""
-    is_toutiao = "今日头条" in cap_web_raw or "头条" in cap_web_raw
-    if is_toutiao and title:
-        first = re.split(r"[。！？!?]", title, maxsplit=1)[0].strip()
-        if first and first != title:
+    # 标题规整: 部分 UGC 平台(今日头条/微博/小红书/抖音等)把整段正文塞进 title 字段,
+    # 导致标题过长。统一处理: 标题超长则取第一句(按 。！？!?\n 分隔); 第一句仍超长则硬截断。
+    title = re.sub(r"\s+", " ", title).strip()
+    TITLE_MAX = 50
+    if len(title) > TITLE_MAX:
+        first = re.split(r"[。！？!?\n]", title, maxsplit=1)[0].strip()
+        # 去掉话题标签/@提及尾巴, 避免第一句里混入 #xxx# @xxx
+        first = re.sub(r"[#＃].*$", "", first).strip()
+        if first and 0 < len(first) <= TITLE_MAX:
             title = first
+        else:
+            base = first if first else title
+            title = base[:TITLE_MAX].rstrip() + "…"
     text = (src.get("text") or "").strip()
     ce = src.get("contentExt") or {}
     # 统一情感判定: 负面优先(有负面不叠加中性), tag/emotion 综合
