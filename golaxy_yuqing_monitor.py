@@ -83,6 +83,8 @@ MOBILE_EVENT_AT_USERIDS = ["anderschen"]  # 陈恩达
 LICAI_ALERT_USERIDS = ["yalinlei", "minazeng"]
 # 命中这些业务标签的负面内容视为"理财业务负面", 触发 LICAI_ALERT_USERIDS @提醒
 LICAI_ALERT_BIZ = ["理财通", "零钱通", "腾讯理财通", "微信理财", "腾安基金"]
+# 微信分付 负面 → @ anderschen(与移动事件同一负责人), 不@ulrichguo
+FENFU_ALERT_BIZ = ["分付", "微信分付"]
 
 # 推送记录
 PUSH_LOG_ENABLE = True
@@ -1058,9 +1060,10 @@ def push_one(it):
     if ok:
         log_push_to_csv(it)
     is_mobile_event = bool(it.get("_mobile_event"))
-    # 业务归属判定: 理财通/零钱通 → yalinlei/minazeng; 移动事件 → anderschen; 其余 → ulrichguo
+    # 业务归属判定: 理财通/零钱通 → yalinlei/minazeng; 移动事件/微信分付 → anderschen; 其余 → ulrichguo
     _biz = it.get("matched_kw", "") or ""
     is_licai_biz = any(b in _biz for b in LICAI_ALERT_BIZ)
+    is_fenfu_biz = any(b in _biz for b in FENFU_ALERT_BIZ)
     # 负面 @ 提醒 (按业务归属, 只@对应负责人, 不再统一兜底@ulrichguo)
     if ok and NEGATIVE_ALERT and it.get("_senti") == -1:
         at_userids = []
@@ -1069,7 +1072,7 @@ def push_one(it):
         if is_licai_biz:
             at_userids += list(LICAI_ALERT_USERIDS)
             at_names += ["@yalinlei", "@minazeng"]
-        elif is_mobile_event:
+        elif is_mobile_event or is_fenfu_biz:
             at_userids += list(MOBILE_EVENT_AT_USERIDS)
             at_names += ["@anderschen"]
         else:
