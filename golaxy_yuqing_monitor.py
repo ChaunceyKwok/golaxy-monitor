@@ -86,6 +86,15 @@ LICAI_ALERT_BIZ = ["理财通", "零钱通", "腾讯理财通", "微信理财", 
 # 微信分付 负面 → @ anderschen(与移动事件同一负责人), 不@ulrichguo
 FENFU_ALERT_BIZ = ["分付", "微信分付"]
 
+# ==================== 领导人特别提示 ====================
+# 涉及腾讯集团/金科高管的舆情, 命中后单独发一条"👑涉领导人"高亮提醒(不论正负面)。
+VIP_PERSONS = [
+    "马化腾", "刘炽平", "任宇昕", "张小龙", "汤道生", "郭凯天", "网大为", "James Mitchell", "米切尔",
+    "林海峰", "郑浩剑", "邱跃鹏",
+]
+VIP_ALERT_MOBILES = ["13140197825"]   # ulrichguo
+VIP_ALERT_USERIDS = []                # 如需额外@他人, 填企业微信 userid
+
 # 推送记录
 PUSH_LOG_ENABLE = True
 PUSH_LOG_DIR = f"{BASE}/push_logs"
@@ -982,6 +991,10 @@ def build_item_v2(src):
 
     interact = (ce.get("commentNum") or 0) + (ce.get("forwardNum") or 0) + (ce.get("viewNum") or 0)
 
+    # 领导人特别提示: 用原始 title+text 全文检测(不用截断后的 title, 防长文人名丢失)
+    _vip_blob = f"{src.get('title') or ''} {src.get('text') or ''}"
+    vip_hits = [p for p in VIP_PERSONS if p in _vip_blob]
+
     return {
         "tag": tag_full,
         "author": src.get("author") or "-",
@@ -995,6 +1008,7 @@ def build_item_v2(src):
         "_senti": senti_int,
         "_contentId": src.get("contentId") or "",
         "_interact": interact,
+        "_vip_hits": vip_hits,
     }
 
 
@@ -1059,6 +1073,23 @@ def push_one(it):
     ok = res.get("errcode") == 0
     if ok:
         log_push_to_csv(it)
+    # 👑 领导人特别提示: 命中腾讯集团/金科高管 → 卡片后单独发一条高亮提醒(不论正负面)
+    vip_hits = it.get("_vip_hits") or []
+    if ok and vip_hits:
+        senti_txt = it["tag"].split("｜")[1] if "｜" in it.get("tag", "") else "中性"
+        vip_text = (f"👑 涉领导人舆情提示｜{('、'.join(vip_hits))}\n"
+                    f"舆情类别：{senti_txt}｜业务：{it.get('matched_kw','-')}\n"
+                    f"{it.get('title','')[:40]}\n{it.get('url','')}")
+        vip_payload = {"msgtype": "text", "text": {"content": vip_text}}
+        if VIP_ALERT_MOBILES:
+            vip_payload["text"]["mentioned_mobile_list"] = list(VIP_ALERT_MOBILES)
+        if VIP_ALERT_USERIDS:
+            vip_payload["text"]["mentioned_list"] = list(VIP_ALERT_USERIDS)
+        try:
+            time.sleep(0.5)
+            http_post(WEBHOOK_URL, vip_payload)
+        except Exception as e:
+            log(f"   领导人提示发送失败: {e}")
     is_mobile_event = bool(it.get("_mobile_event"))
     # 业务归属判定: 理财通/零钱通 → yalinlei/minazeng; 移动事件/微信分付 → anderschen; 其余 → ulrichguo
     _biz = it.get("matched_kw", "") or ""
