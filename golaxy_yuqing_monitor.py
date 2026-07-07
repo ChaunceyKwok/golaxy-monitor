@@ -88,10 +88,14 @@ FENFU_ALERT_BIZ = ["分付", "微信分付"]
 
 # ==================== 领导人特别提示 ====================
 # 涉及腾讯集团/金科高管的舆情, 命中后单独发一条"👑涉领导人"高亮提醒(不论正负面)。
+# 名单可随时增删。用全名精确匹配, 避免短名误命中(如"马化腾"不会因"腾"字误触)。
 VIP_PERSONS = [
+    # 腾讯集团高管
     "马化腾", "刘炽平", "任宇昕", "张小龙", "汤道生", "郭凯天", "网大为", "James Mitchell", "米切尔",
+    # 腾讯金融科技高管
     "林海峰", "郑浩剑", "邱跃鹏",
 ]
+# 领导人提示 @ 谁: ulrichguo 用手机号(见 ALERT_MOBILES), 其余可加 userid
 VIP_ALERT_MOBILES = ["13140197825"]   # ulrichguo
 VIP_ALERT_USERIDS = []                # 如需额外@他人, 填企业微信 userid
 
@@ -457,13 +461,16 @@ def resolve_business_tag(title, text, hit_brands):
     blob = f"{title or ''} {text or ''}"
     title_s = title or ""
     scores = {}
+    # 候选集: hit_brands 命中的 + 场景词表里的业务
     candidates = set(hit_brands) | set(BUSINESS_SCENE_KW.keys())
     for biz in candidates:
         s = 0
+        # 完整品牌词命中(强信号)
         if biz in blob:
             s += 3
             if biz in title_s:
                 s += 2
+        # 场景词命中次数
         for kw in BUSINESS_SCENE_KW.get(biz, []):
             c = blob.count(kw)
             if c:
@@ -476,6 +483,7 @@ def resolve_business_tag(title, text, hit_brands):
         return " / ".join(hit_brands) if hit_brands else "舆情"
     top = max(scores.values())
     winners = [b for b, v in scores.items() if v == top]
+    # 平局时优先 hit_brands 里出现的, 保持稳定
     if len(winners) > 1:
         for hb in hit_brands:
             if hb in winners:
@@ -575,6 +583,18 @@ PRODUCT_KNOWLEDGE_SUBTAGS = ["产品知识及活动"]
 # 判断: captureWebsite 是媒体型(不是微信公众号/社媒) + 内容含新闻价值词
 PRODUCT_KW_MEDIA_OVERRIDE = ["内测", "测试", "官宣", "首批", "新物种", "AI支付", "工具箱",
                               "盗刷", "安全", "风险", "违规", "扣款", "冻结", "警惕", "删掉"]
+
+# 官方账号作者(author 精确/包含匹配): 腾讯金融科技矩阵官方号发布的内容, 即使被标"产品知识及活动"
+# subtag, 也应放行(重大产品动态/升级公告本就该推, 不是运营软文)。
+# (修复: 官方号《腾讯自选股接入混元Hy3模型》被"产品知识"subtag黑名单误杀)
+OFFICIAL_ACCOUNTS = ["腾讯金融科技", "腾讯自选股财经", "腾讯自选股微信版", "腾讯自选股",
+                     "腾讯理财通", "微信支付", "腾讯微证券", "微证券"]
+
+# 产品重大动态信号词: 命中即视为有舆情价值的官方/媒体产品动态(而非运营教程), 放行 subtag 黑名单
+# (混元/大模型接入、功能上线发布、版本升级、战略合作等)
+PRODUCT_DYNAMIC_KW = ["混元", "大模型", "接入", "升级", "上线", "发布", "推出", "新增",
+                      "战略合作", "合作", "全面接入", "全场景", "全链路", "AI服务",
+                      "智能问答", "问元宝", "新功能", "重磅", "正式"]
 
 # 产品功能/活动友好关键词: 命中后放行 PRODUCT_KNOWLEDGE_SUBTAGS / UGC_PERSONAL 拦截
 # 这些词代表腾讯金融产品的实际功能或活动(如亲情账户、收益对比、福利领取)
@@ -853,6 +873,7 @@ def _compress_market(text):
     code = m.group(2) or ""
     action = m.group(3) or "异动"
     change = m.group(4) or ""
+    # 标的名太短(可能误匹配)则放弃
     if len(name) < 3:
         return None
     head = f"{name}（{code}）" if code else name
@@ -863,18 +884,21 @@ def make_summary(title, text, hit_words, max_len=80):
     """规则式摘要(零API): 先压缩行情播报体; 否则剥离排版噪音后按'信息密度+舆情信号+主体'
     打分抽句, 丢弃寒暄/过渡句, 按原文顺序拼到 max_len。"""
     text = re.sub(r"\s+", " ", (text or "")).strip()
+    # 去掉结尾成串话题标签 (#xxx #yyy)
     cleaned = re.sub(r"(#[^#\s]+\s*)+$", "", text).strip() or text
     if not cleaned:
         return (title or "(无正文)")[:max_len]
 
+    # ① 行情播报体专项压缩
     mk = _compress_market(cleaned)
     if mk:
         return mk[:max_len]
 
+    # ② 通用抽句
     sentences = re.split(r"(?<=[。！？!?；;\n])", cleaned)
     clean_sents = []
     for s in sentences:
-        s = _LAYOUT_PAT.sub("", s).strip(" ，,、；;：:")
+        s = _LAYOUT_PAT.sub("", s).strip(" ，,、；;：:")   # 剥离句首排版标记
         s = re.sub(r"\s+", " ", s)
         if len(s) >= 6:
             clean_sents.append(s)
@@ -885,7 +909,7 @@ def make_summary(title, text, hit_words, max_len=80):
     scored = []
     seen = set()
     for i, s in enumerate(clean_sents):
-        if s in seen:
+        if s in seen:      # 去重复句
             continue
         seen.add(s)
         sl = s.lower()
@@ -893,18 +917,19 @@ def make_summary(title, text, hit_words, max_len=80):
         if any(w.lower() in sl for w in core):
             sc += 3
         sig = sum(1 for g in _SIGNAL_WORDS if g in s)
-        sc += min(sig, 2) * 2
-        if re.search(r"\d", s):
+        sc += min(sig, 2) * 2                       # 舆情信号词(封顶)
+        if re.search(r"\d", s):                     # 含数字=有事实密度
             sc += 1
-        if re.search(r"[%％元万亿倍]", s):
+        if re.search(r"[%％元万亿倍]", s):          # 含量化单位再+1
             sc += 1
-        if _FILLER_PAT.match(s):
+        if _FILLER_PAT.match(s):                    # 寒暄/引子降权
             sc -= 3
         scored.append((sc, i, s))
 
     picked = [x for x in scored if x[0] > 0]
     if not picked:
-        picked = [min(scored, key=lambda x: x[1])]
+        picked = [min(scored, key=lambda x: x[1])]  # 全低分: 取最靠前的一句
+    # 先按分数选, 再按原文顺序拼接(保证可读)
     picked.sort(key=lambda x: (-x[0], x[1]))
     chosen = picked[:4]
     chosen.sort(key=lambda x: x[1])
@@ -968,6 +993,7 @@ def build_item_v2(src):
         if first and 0 < len(first) <= TITLE_MAX:
             title = first
         else:
+            # 第一句也过长或被清空 → 硬截断到上限
             base = first if first else title
             title = base[:TITLE_MAX].rstrip() + "…"
     text = (src.get("text") or "").strip()
@@ -1097,9 +1123,9 @@ def push_one(it):
     is_fenfu_biz = any(b in _biz for b in FENFU_ALERT_BIZ)
     # 负面 @ 提醒 (按业务归属, 只@对应负责人, 不再统一兜底@ulrichguo)
     if ok and NEGATIVE_ALERT and it.get("_senti") == -1:
-        at_userids = []
-        at_mobiles = []
-        at_names = []
+        at_userids = []      # 用 userid @ (yalinlei/minazeng/anderschen)
+        at_mobiles = []      # 用手机号 @ (ulrichguo)
+        at_names = []        # 文案里展示的 @昵称
         if is_licai_biz:
             at_userids += list(LICAI_ALERT_USERIDS)
             at_names += ["@yalinlei", "@minazeng"]
@@ -1232,6 +1258,23 @@ def run_once(asts, excludes, block_media, block_url):
         cap_web_raw = (src.get("captureWebsite") or "")
         is_social_media = any(s in cap_web_raw.lower() for s in ["微信", "小红书", "微博", "微头条", "百家号", "搜狐号", "网易号"])
         has_media_kw = any(kw in combined_for_kw for kw in PRODUCT_KW_MEDIA_OVERRIDE)
+
+        # ⚡ 官方号重大动态 快速放行通道 (优先于所有为噪音设计的关卡):
+        #   官方账号作者(腾讯金融科技/腾讯自选股财经/微证券等) + 命中产品动态词(混元/大模型/接入/升级/发布)
+        #   → 直接放行, 跳过 URL黑名单/排除词/自选股App规则等 (这些是拦机器播报/软文的, 不该套在官方公告上)
+        #   防误放: ETF机器播报作者是"市场透视"(不在OFFICIAL_ACCOUNTS), 不会命中此通道。
+        #   (修复: 官方号《腾讯自选股接入混元Hy3模型》被 subtag黑名单 + gu.qq.com URL黑名单
+        #    + 排除词"配股"(误命中"适配股票") 三重误杀 → 全网副本几乎全漏)
+        _author = (src.get("author") or "").strip()
+        is_official = any(oa in _author for oa in OFFICIAL_ACCOUNTS)
+        has_dynamic_kw = any(dk in combined_for_kw for dk in PRODUCT_DYNAMIC_KW)
+        if is_official and has_dynamic_kw:
+            item = build_item_v2(src)
+            item["matched_kw"] = resolve_business_tag(title_raw, text_s, [c for c in COMPOUND_CHECK if c.lower() in combined_for_kw.lower()])
+            matched.append(item)
+            batch_fps.add(fp)
+            continue
+
         if _subtag in PRODUCT_KNOWLEDGE_SUBTAGS and not has_friendly_kw:
             if is_social_media or not has_media_kw:
                 blocked += 1; continue
