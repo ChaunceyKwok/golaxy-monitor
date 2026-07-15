@@ -1291,11 +1291,15 @@ def run_once(asts, excludes, block_media, block_url):
             text_s = src.get("text") or ""
             combined_for_kw = f"{title_raw} {text_s}"
             hit_brand = any(c.lower() in combined_for_kw.lower() for c in COMPOUND_CHECK)
-            if hit_brand:
+            # 引流开户软文过滤: 官方媒体号(subtag=官方及央媒资讯)也会发"点击开户/无需下载/轻松投资"
+            # 类拉新推广, 命中 PROMO_KW 即视为软文噪音, 不走白名单放行 → 落入下方正常过滤(会被拦)。
+            # (修复2026-07-14: A股攻略笔记《无需下载!微信内轻松投资,点击开户》被白名单误当资讯推)
+            is_promo = any(p in combined_for_kw for p in PROMO_KW)
+            if hit_brand and not is_promo:
                 matched.append(build_item_v2(src))
                 batch_fps.add(fp)
                 continue
-            # subtag 是央媒资讯但内容无关金融科技 → 走正常过滤流程 (大概率被排除词拦住)
+            # subtag 是央媒资讯但内容无关金融科技(或为引流软文) → 走正常过滤流程 (大概率被排除词/PROMO拦住)
 
         # ⚡ 竞品替代种草 强制放行 (用户指定 2026-07-07):
         #   「余额宝 + 零钱通 + 资金动作词(攒/存/放/转/收益…)」→ 竞品替代压制舆情, 无条件放行,
