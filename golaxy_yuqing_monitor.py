@@ -1183,7 +1183,10 @@ def push_one(it):
     # 业务归属判定: 理财通/零钱通 → yalinlei/minazeng; 移动事件/微信分付/财付通小贷 → anderschen; 其余 → ulrichguo
     _biz = it.get("matched_kw", "") or ""
     _biz_blob = f"{it.get('title','')} {it.get('text','')}"
-    is_licai_biz = any(b in _biz for b in LICAI_ALERT_BIZ)
+    # 理财通/零钱通体系: 标签不可靠(如"...微信零钱通"含"微信零钱"子串→标签被判"微信零钱"→漏@),
+    # 故 标签命中 OR 正文/标题含理财体系核心词(理财通/零钱通/腾讯理财通/微信理财/腾安基金) 均算。
+    # (修复2026-07-21: 小红书《银行卡管控蔓延到微信零钱通》标签误判"微信零钱"漏@minazeng/yalinlei)
+    is_licai_biz = any(b in _biz for b in LICAI_ALERT_BIZ) or any(b in _biz_blob for b in LICAI_ALERT_BIZ)
     is_fenfu_biz = any(b in _biz for b in FENFU_ALERT_BIZ)
     # 财付通小贷: 标签不可靠, 用原词在 标题+正文 匹配
     is_cft_xiaodai = any(k in _biz_blob for k in CFT_XIAODAI_KW)
