@@ -83,6 +83,10 @@ MOBILE_EVENT_AT_USERIDS = ["anderschen"]  # 陈恩达
 LICAI_ALERT_USERIDS = ["yalinlei", "minazeng"]
 # 命中这些业务标签的负面内容视为"理财业务负面", 触发 LICAI_ALERT_USERIDS @提醒
 LICAI_ALERT_BIZ = ["理财通", "零钱通", "腾讯理财通", "微信理财", "腾安基金"]
+# 微信支付涉及基金的内容 → 也@yalinlei/minazeng(2026-08-05用户指定): 命中腾讯支付品牌 + 含"基金"。
+# FUND_EXCLUDE: 排除与理财基金无关的"基金"噪音(公积金/基金会/社保基金/私募基金会等)。
+FUND_TRIGGER = "基金"
+FUND_EXCLUDE = ["公积金", "住房公积金", "基金会", "社保基金", "医保基金", "养老基金", "慈善基金", "教育基金", "维权基金", "互助基金", "扶贫基金"]
 # 微信分付 负面 → @ anderschen(与移动事件同一负责人), 不@ulrichguo
 FENFU_ALERT_BIZ = ["分付", "微信分付"]
 # 财付通小贷 相关(含正面/中性/负面) → @ anderschen。命中"财付通小贷"字样即触发(标题或正文)。
@@ -1220,6 +1224,14 @@ def push_one(it):
     # 故 标签命中 OR 正文/标题含理财体系核心词(理财通/零钱通/腾讯理财通/微信理财/腾安基金) 均算。
     # (修复2026-07-21: 小红书《银行卡管控蔓延到微信零钱通》标签误判"微信零钱"漏@minazeng/yalinlei)
     is_licai_biz = any(b in _biz for b in LICAI_ALERT_BIZ) or any(b in _biz_blob for b in LICAI_ALERT_BIZ)
+    # 微信支付涉及基金 → 也归入 LICAI @路由(@yalinlei/minazeng)。(2026-08-05用户指定)
+    # 判定: 命中腾讯支付品牌(COMPOUND) + 含"基金"; 先剔除公积金/基金会/社保基金等无关"基金"词再判, 防误@。
+    if not is_licai_biz:
+        _fund_blob = _biz_blob
+        for _fe in FUND_EXCLUDE:
+            _fund_blob = _fund_blob.replace(_fe, "")
+        if FUND_TRIGGER in _fund_blob and any(c.lower() in _biz_blob.lower() for c in COMPOUND_CHECK):
+            is_licai_biz = True
     is_fenfu_biz = any(b in _biz for b in FENFU_ALERT_BIZ)
     # 财付通小贷: 标签不可靠, 用原词在 标题+正文 匹配
     is_cft_xiaodai = any(k in _biz_blob for k in CFT_XIAODAI_KW)
