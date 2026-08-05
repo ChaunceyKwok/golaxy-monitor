@@ -60,8 +60,8 @@ POLL_INTERVAL = 60       # 常驻模式每轮间隔(秒)
 # 时间窗口: 接口(EsQueryRequest)仅支持 publishTimeFrom/To 作过滤字段;
 # 之前误用 captureTimeFrom/To(接口不认、被静默忽略 → 窗口从未生效, 等于每轮全量靠去重凑合)。
 # 改用 publishTime 窗口后, 因"发布早但入库晚"的滞后, 回看窗口需放大以防漏报。
-WINDOW_MINUTES = 360     # 首次/回扫拉取窗口(分钟, publishTime)
-LOOKBACK_MINUTES = 360   # 增量回看(分钟, publishTime): 覆盖发布→入库滞后, 防漏报; 去重保证不重推
+WINDOW_MINUTES = 2880    # 首次/回扫拉取窗口(分钟, publishTime): 48h, 覆盖发布→入库/回补的长滞后
+LOOKBACK_MINUTES = 2880  # 增量回看(分钟, publishTime): 48h。覆盖"发布早但入库/API回补晚"的滞后(如Golaxy API停更后补历史数据), 保证回补内容能被拉到并按原始发布时间推送; 去重(cid+标题指纹)保证绝不重推。2026-08-05放大(原360=6h不够,曾漏8-4积压回补)。
 PAGE_SIZE = 200           # 每页条数(API 上限 1000)
 MAX_PAGES = 15            # 每轮最多翻页数 (无条数上限, 窗口内拉满取全, 消除"第201条漏报")
 REQ_TIMEOUT = 10          # HTTP 请求超时(秒)
@@ -473,7 +473,7 @@ FETCH_DEADLINE = 40    # fetch_golaxy 总耗时上限(秒): 窗口内拉满取�
 # 改 title(标题命中)而非 text(正文命中)的原因: 标题短, "微信支付"分词凑词(微信+支付分散)
 # 误命中概率远低于长正文; 实测 title 检索完整词占比 31/50, text 仅 15/50, 精度翻倍。
 # (本地仍保留 COMPOUND_CHECK 复合词校验作冗余精筛)
-MONITOR_TEXT = "腾讯金融科技 微信支付 腾讯支付 财付通 腾讯理财通 零钱通 微信零钱通 腾安基金 腾讯自选股 stockbuddy 微信分付 微企付 微信零钱 微信提现 微信香港钱包 微信支付香港 WeChatPayHK WeChat港币钱包 微信话费 微信充值 移动话费 充值话费"
+MONITOR_TEXT = "腾讯金融科技 微信支付 腾讯支付 财付通 腾讯理财通 零钱通 微信零钱通 腾安基金 腾讯自选股 stockbuddy 微信分付 微企付 微信零钱 微信提现 微信香港钱包 微信支付香港 WeChatPayHK WeChat港币钱包 TenPayGo 微信话费 微信充值 移动话费 充值话费"
 
 # ES match 分词后 ("微信支付"→"微信"+"支付") 太宽泛，本地加复合词校验
 # "腾讯支付": 用户口语对微信支付/财付通支付体系的通称(如"腾讯支付被冻")。
@@ -481,10 +481,12 @@ MONITOR_TEXT = "腾讯金融科技 微信支付 腾讯支付 财付通 腾讯理
 # "stockbuddy": 腾讯自选股英文名。用户要求一旦出现即推送(见下 FORCE_PUSH_KW 强制放行通道)。2026-07-14。
 # 微信香港钱包(WeChat Pay HK): 微信支付香港版独立品牌, 正文常写英文, 未必带中文"微信支付"→曾漏。
 #   COMPOUND匹配用 c.lower() in combined(combined已lower), 故英文写小写形式即可兼容大小写。2026-07-17。
+# TenPayGo: 腾讯面向境外用户的独立支付App, 2026年7月初上线, 独立英文品牌(不含中文腾讯系词)→必须单列监测。2026-07-24。
 COMPOUND_CHECK = ["腾讯金融科技", "微信支付", "腾讯支付", "财付通", "腾讯理财通", "理财通", "微信理财", "零钱通", "微信零钱通",
                   "腾安基金", "腾讯自选股", "stockbuddy", "微信分付", "微企付",
                   "微信零钱", "微信提现",
-                  "微信香港钱包", "微信支付香港", "wechat pay hk", "wechatpayhk", "wechat港币钱包"]
+                  "微信香港钱包", "微信支付香港", "wechat pay hk", "wechatpayhk", "wechat港币钱包",
+                  "tenpaygo", "tenpay go"]
 
 # ⚡ 强制放行关键词: 一旦出现即推送, 跳过所有过滤关卡(排除词/UGC/SPAM/subtag黑名单等)。
 # stockbuddy(腾讯自选股英文名)命中即视为高优先舆情。匹配大小写不敏感。2026-07-14 用户指定。
@@ -532,6 +534,9 @@ def resolve_business_tag(title, text, hit_brands):
     # 品牌名归一化: 香港钱包英文变体(wechat pay hk / wechatpayhk / 微信支付香港)统一显示为"微信香港钱包"
     _HK_ALIASES = {"wechat pay hk", "wechatpayhk", "微信支付香港", "微信香港钱包", "wechat港币钱包"}
     hit_brands = ["微信香港钱包" if b.lower() in _HK_ALIASES else b for b in hit_brands]
+    # TenPayGo 英文变体(tenpaygo / tenpay go)统一显示为"TenPayGo"
+    _TPG_ALIASES = {"tenpaygo", "tenpay go"}
+    hit_brands = ["TenPayGo" if b.lower() in _TPG_ALIASES else b for b in hit_brands]
     # 去重保序
     _seen = set(); hit_brands = [b for b in hit_brands if not (b in _seen or _seen.add(b))]
     blob = f"{title or ''} {text or ''}"
@@ -1353,6 +1358,7 @@ def run_once(asts, excludes, block_media, block_url):
             item = build_item_v2(src)
             _hb = [c for c in COMPOUND_CHECK if c.lower() in _combined_fp]
             item["matched_kw"] = resolve_business_tag(title_raw, _text_fp, _hb) if _hb else "StockBuddy"
+            item["_fp"] = fp
             matched.append(item)
             batch_fps.add(fp)
             continue
@@ -1365,6 +1371,7 @@ def run_once(asts, excludes, block_media, block_url):
             if not any(p in _am_blob for p in PROMO_KW):
                 item = build_item_v2(src)
                 item["matched_kw"] = resolve_business_tag(title_raw, src.get("text") or "", _hb_am)
+                item["_fp"] = fp
                 matched.append(item)
                 batch_fps.add(fp)
                 continue
@@ -1397,6 +1404,7 @@ def run_once(asts, excludes, block_media, block_url):
                 and any(a in _combined_seed for a in COMPETITOR_SEED_ACTION)):
             item = build_item_v2(src)
             item["matched_kw"] = "竞品替代种草(余额宝vs零钱通)"
+            item["_fp"] = fp
             matched.append(item)
             batch_fps.add(fp)
             continue
@@ -1423,6 +1431,7 @@ def run_once(asts, excludes, block_media, block_url):
         if is_official and has_dynamic_kw:
             item = build_item_v2(src)
             item["matched_kw"] = resolve_business_tag(title_raw, text_s, [c for c in COMPOUND_CHECK if c.lower() in combined_for_kw.lower()])
+            item["_fp"] = fp
             matched.append(item)
             batch_fps.add(fp)
             continue
@@ -1467,6 +1476,7 @@ def run_once(asts, excludes, block_media, block_url):
             item["_mobile_event"] = True  # 标记移动事件 → 推送时 @anderschen(陈恩达)
             if ev_blame:
                 item["_senti"] = -1  # 甩锅腾讯/微信的失实负面 → 强制负面, 触发@提醒
+            item["_fp"] = fp
             matched.append(item)
             batch_fps.add(fp)
             continue
@@ -1602,6 +1612,7 @@ def run_once(asts, excludes, block_media, block_url):
         item = build_item_v2(src)
         # 覆盖 matched_kw: 裁定文章真正业务主体(防"通篇微信支付、文末提一句零钱通→误标零钱通")
         item["matched_kw"] = resolve_business_tag(title_raw, text_s, hit_brands)
+        item["_fp"] = fp
         matched.append(item)
         batch_fps.add(fp)
 
@@ -1613,8 +1624,12 @@ def run_once(asts, excludes, block_media, block_url):
     # 4. 更新去重状态 (含扫描点, 用于增量窗口)
     pushed_set = set(pushed_ids)
     new_ids = [f"cid:{c}" for c in pushed_ids]
-    pushed_fps = [fp for item, fp in zip(matched, batch_fps)
-                  if item["_contentId"] in pushed_set]
+    # fp(标题指纹)去重: 把成功推送项的 fp 并入 seen, 确保同标题内容跨轮/跨副本不重复推。
+    # (修复2026-08-05: 原 zip(matched, batch_fps) 因 set 无序会错配 fp↔item; 窗口拉长到48h后同一条
+    #  会被反复扫到, 错配的fp拦不住→重复推。改为按 _contentId 精确取"已成功推送"项的 fp。)
+    # 注: 用 item["_fp"](构建时写入)按 pushed_set 过滤 → 既不重复(成功的记牢)也不漏(失败的下轮重试)。
+    pushed_fps = [item.get("_fp") for item in matched
+                  if item.get("_contentId") in pushed_set and item.get("_fp")]
     new_ids += pushed_fps
     # 标记本次扫描时间(用于增量窗口), 清理旧扫描点只保留最新
     seen_list = [x for x in seen_list if not x.startswith("scan:")]
