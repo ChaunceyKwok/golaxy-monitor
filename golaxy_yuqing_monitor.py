@@ -87,6 +87,15 @@ LICAI_ALERT_BIZ = ["理财通", "零钱通", "腾讯理财通", "微信理财", 
 # FUND_EXCLUDE: 排除与理财基金无关的"基金"噪音(公积金/基金会/社保基金/私募基金会等)。
 FUND_TRIGGER = "基金"
 FUND_EXCLUDE = ["公积金", "住房公积金", "基金会", "社保基金", "医保基金", "养老基金", "慈善基金", "教育基金", "维权基金", "互助基金", "扶贫基金"]
+# 理财敏感信号(2026-08-06 用户指定): 零钱通/理财通类内容即便被上游判"中性", 只要带这些负向讨论信号,
+# 也视为敏感舆情 → @LICAI_ALERT_USERIDS。解决"敏感但被标中性→静默滑过"(如《零钱通彻底不香了?》
+# 讲收益只剩几毛+监管新规后不能直接付款, 被判中性→原先不@)。
+LICAI_SENSITIVE_KW = [
+    "不香了", "不划算", "还不如", "跑不过", "缩水", "下降", "太低", "越来越低", "降了", "下调",
+    "收益低", "收益差", "没收益", "白干", "亏", "赔", "血亏",
+    "不能直接", "不让", "限制", "受限", "新规", "监管新规", "下架", "取消", "关停", "停用",
+    "转出", "麻烦", "坑", "避雷", "别放", "不要放", "撤了", "退出", "搬走", "转走",
+]
 # 微信分付 负面 → @ anderschen(与移动事件同一负责人), 不@ulrichguo
 FENFU_ALERT_BIZ = ["分付", "微信分付"]
 # 财付通小贷 相关(含正面/中性/负面) → @ anderschen。命中"财付通小贷"字样即触发(标题或正文)。
@@ -1235,6 +1244,9 @@ def push_one(it):
     is_fenfu_biz = any(b in _biz for b in FENFU_ALERT_BIZ)
     # 财付通小贷: 标签不可靠, 用原词在 标题+正文 匹配
     is_cft_xiaodai = any(k in _biz_blob for k in CFT_XIAODAI_KW)
+    # 理财敏感(2026-08-06): 理财业务(零钱通/理财通/基金等) + 负向讨论信号 → 即便上游判"中性"也@理财负责人。
+    # (如《零钱通彻底不香了?》讲收益只剩几毛+新规后不能直接付款, 被判中性 → 原先静默不@)
+    is_licai_sensitive = is_licai_biz and any(k in _biz_blob for k in LICAI_SENSITIVE_KW)
     # 负面 @ 提醒 (按业务归属, 只@对应负责人, 不再统一兜底@ulrichguo)
     if ok and NEGATIVE_ALERT and it.get("_senti") == -1:
         at_userids = []      # 用 userid @ (yalinlei/minazeng/anderschen)
@@ -1287,6 +1299,18 @@ def push_one(it):
             http_post(WEBHOOK_URL, payload)
         except Exception as e:
             log(f"   财付通小贷@提醒失败: {e}")
+    # 理财敏感(非负面: 被判中性/正面, 但含负向讨论信号) → 单独 @ yalinlei/minazeng
+    # (2026-08-06 用户指定: 如《零钱通彻底不香了?》收益缩水+新规限制类内容, 上游判中性但属敏感舆情)
+    elif ok and is_licai_sensitive and LICAI_ALERT_USERIDS:
+        at_text = (f"⚠️ 理财业务敏感舆情(非负面标记)｜{it.get('matched_kw','-')}\n"
+                   f"{it.get('title','')[:40]}\n@yalinlei @minazeng 请关注。")
+        payload = {"msgtype": "text", "text": {"content": at_text,
+                                               "mentioned_list": list(LICAI_ALERT_USERIDS)}}
+        try:
+            time.sleep(0.5)
+            http_post(WEBHOOK_URL, payload)
+        except Exception as e:
+            log(f"   理财敏感@提醒失败: {e}")
     return ok, res
 
 
@@ -1400,8 +1424,21 @@ def run_once(asts, excludes, block_media, block_url):
             # 类拉新推广, 命中 PROMO_KW 即视为软文噪音, 不走白名单放行 → 落入下方正常过滤(会被拦)。
             # (修复2026-07-14: A股攻略笔记《无需下载!微信内轻松投资,点击开户》被白名单误当资讯推)
             is_promo = any(p in combined_for_kw for p in PROMO_KW)
-            if hit_brand and not is_promo:
-                matched.append(build_item_v2(src))
+            # 真央媒校验(2026-08-06新增): 上游subtag严重不可信 —— 实测近48h该subtag的5条里0条真央媒
+            # (杜克校友会/潮商直播/玉溪企服网admin/B站"信息探浪者"等自媒体全被误标"官方及央媒资讯"),
+            # 等于给自媒体开了跳过过滤的绿色通道(曾致开户软文误推、《欧洲8国15城》重复推61次)。
+            # 改为"上游标签 + 我方AUTHORITY_MEDIA党央媒名单"双条件; 作者/站点/标题/正文任一命中即可
+            # (转载稿署名常在正文)。不满足者不给绿色通道, 落入下方正常过滤(该推的照样推, 只是不再豁免)。
+            _wm_src_blob = f"{src.get('author') or ''} {src.get('captureWebsite') or ''} {src.get('sourceWebsite') or ''} {combined_for_kw}"
+            is_real_authority = any(a.lower() in _wm_src_blob.lower() for a in AUTHORITY_MEDIA)
+            if hit_brand and is_real_authority and not is_promo:
+                # 注: 必须写 _fp, 否则收尾按 item["_fp"] 取指纹取到None→去重档案漏记→每轮窗口重复扫到→重复推。
+                # (修复2026-08-06: 本分支原为 matched.append(build_item_v2(src)) 内联写法, 2026-08-05补_fp时
+                #  grep "matched.append(item)" 未匹配到而漏改→ 《微信支付接入欧洲8国15城公交系统》
+                #  (subtag=官方及央媒资讯)重复推送58次。)
+                _item_wm = build_item_v2(src)
+                _item_wm["_fp"] = fp
+                matched.append(_item_wm)
                 batch_fps.add(fp)
                 continue
             # subtag 是央媒资讯但内容无关金融科技(或为引流软文) → 走正常过滤流程 (大概率被排除词/PROMO拦住)
@@ -1643,6 +1680,13 @@ def run_once(asts, excludes, block_media, block_url):
     pushed_fps = [item.get("_fp") for item in matched
                   if item.get("_contentId") in pushed_set and item.get("_fp")]
     new_ids += pushed_fps
+    # 🛡️ 兜底防线(2026-08-06): 若有"成功推送但_fp缺失"的项(新增分支漏写_fp), 用batch_fps 整体补记,
+    # 宁可多记也绝不漏记 → 防止再次出现"指纹没入档案→每轮重复推"的事故(欧洲8国15城重复58次)。
+    _missing_fp = any(item.get("_contentId") in pushed_set and not item.get("_fp")
+                      for item in matched)
+    if _missing_fp and batch_fps:
+        log("   ⚠️ 检测到推送项缺失_fp指纹, 已用batch_fps兜底补记(防重复推)")
+        new_ids += list(batch_fps)
     # 标记本次扫描时间(用于增量窗口), 清理旧扫描点只保留最新
     seen_list = [x for x in seen_list if not x.startswith("scan:")]
     seen_list.append(f"scan:{now.isoformat()}")
